@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+platform_id_counter.json
+order_logs.json
+order_bindings.json
+position_snapshot.json
+.processed_orders.json
+credentials.csv
+*.log
+.env

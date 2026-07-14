@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Delta → Mirror Pip Copier</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="wrap">
+    <header class="header">
+      <div>
+        <p class="eyebrow">Order Copier</p>
+        <h1>Delta → Mirror Pip</h1>
+        <p class="sub">Polls Delta net positions and copies opens/closes to Mirror Pip with platform ID mapping (buy / sell / short / cover).</p>
+      </div>
+      <div class="status-card" id="statusCard">
+        <span class="dot" id="statusDot"></span>
+        <div>
+          <div class="status-label" id="statusLabel">Stopped</div>
+          <div class="status-meta" id="statusMeta">Idle</div>
+        </div>
+      </div>
+    </header>
+
+    <section class="controls">
+      <button id="btnStart" class="btn btn-start" type="button">Start Copier</button>
+      <button id="btnStop" class="btn btn-stop" type="button" disabled>Stop</button>
+      <button id="btnTestDelta" class="btn btn-ghost" type="button">Test Delta API</button>
+      <p class="flash" id="flash"></p>
+    </section>
+
+    <div class="grid">
+      <section class="panel">
+        <h2>User Config</h2>
+        <p class="hint">Edit Exchange, Code, Webhook URL, and poll interval (min 200 ms).</p>
+        <form id="configForm" class="form">
+          <label>
+            Exchange
+            <input id="exchange" name="exchange" type="text" autocomplete="off" placeholder="delta" />
+          </label>
+          <label>
+            Code
+            <input id="code" name="code" type="text" autocomplete="off" placeholder="Mirror Pip code" />
+          </label>
+          <label class="full">
+            Webhook URL
+            <input id="mirrorpip_webhook_url" name="mirrorpip_webhook_url" type="url" autocomplete="off" placeholder="https://trade.mirrorpip.com/tradingview" />
+          </label>
+          <label>
+            Instrument type
+            <input id="instrument_type" name="instrument_type" type="text" autocomplete="off" />
+          </label>
+          <label>
+            Poll interval (ms)
+            <input id="poll_interval_ms" name="poll_interval_ms" type="number" min="200" step="50" placeholder="300" />
+          </label>
+          <label class="full">
+            Delta API base URL
+            <input id="delta_base_url" name="delta_base_url" type="url" />
+          </label>
+          <button class="btn btn-primary" type="submit">Save Config</button>
+        </form>
+      </section>
+
+      <section class="panel">
+        <h2>Delta Credentials</h2>
+        <p class="hint">Loaded from / saved to <code>credentials.csv</code>. Leave a field blank to keep the existing value.</p>
+        <form id="credsForm" class="form">
+          <label class="full">
+            API Key
+            <input id="api_key" name="key" type="text" autocomplete="off" spellcheck="false" />
+          </label>
+          <label class="full">
+            API Secret
+            <input id="api_secret" name="secret" type="password" autocomplete="off" spellcheck="false" />
+          </label>
+          <label class="full">
+            TOTP (optional)
+            <input id="api_totp" name="totp" type="text" autocomplete="off" spellcheck="false" />
+          </label>
+          <button class="btn btn-primary" type="submit">Update Credentials</button>
+        </form>
+      </section>
+    </div>
+
+    <section class="panel logs-panel">
+      <div class="logs-head">
+        <div>
+          <h2>Order Log</h2>
+          <p class="hint">Delta ↔ platform ID ↔ Mirror ID mappings, exits, and errors.</p>
+        </div>
+        <div class="logs-actions">
+          <button id="btnDownloadLogs" class="btn btn-ghost" type="button">Download CSV</button>
+          <button id="btnClearLogs" class="btn btn-ghost" type="button">Clear logs</button>
+        </div>
+      </div>
+
+      <form id="logFilterForm" class="log-filters">
+        <label>
+          Symbol
+          <select id="filterSymbol">
+            <option value="">All symbols</option>
+          </select>
+        </label>
+        <label>
+          From date
+          <input id="filterFrom" type="date" />
+        </label>
+        <label>
+          To date
+          <input id="filterTo" type="date" />
+        </label>
+        <label class="check">
+          <input id="filterAll" type="checkbox" />
+          All logs to date
+        </label>
+        <button class="btn btn-primary" type="submit">Apply filters</button>
+      </form>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Status</th>
+              <th>Delta ID</th>
+              <th>Platform ID</th>
+              <th>Mirror ID</th>
+              <th>Symbol</th>
+              <th>Order type</th>
+              <th>Qty</th>
+              <th>Price</th>
+              <th>TP / SL</th>
+              <th>Message</th>
+            </tr>
+          </thead>
+          <tbody id="logsBody">
+            <tr><td colspan="11" class="empty">No orders yet.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <div class="modal-backdrop" id="confirmModal" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <div class="modal-icon" id="modalIcon">✓</div>
+      <h3 id="modalTitle">Success</h3>
+      <p id="modalMessage"></p>
+      <pre class="modal-detail" id="modalDetail" hidden></pre>
+      <button type="button" class="btn btn-primary" id="modalClose">OK</button>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
