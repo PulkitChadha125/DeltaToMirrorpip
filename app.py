@@ -102,6 +102,14 @@ def _log_filters_from_request() -> dict:
     }
 
 
+@app.get("/api/logs/<log_id>")
+def api_log_detail(log_id: str):
+    row = copier.get_log(log_id)
+    if not row:
+        return jsonify({"ok": False, "message": "Log not found."}), 404
+    return jsonify({"ok": True, "log": row})
+
+
 @app.get("/api/logs")
 def api_logs():
     filters = _log_filters_from_request()
@@ -153,4 +161,4 @@ def api_test_delta():
 
 
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=5050, debug=False, threaded=True)
+    app.run(host="0.0.0.0", port=5050, debug=False, threaded=True)

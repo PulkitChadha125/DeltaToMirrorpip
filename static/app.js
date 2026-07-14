@@ -7,6 +7,8 @@ let logFilters = {
   all: false,
 };
 
+const logsById = {};
+
 function flash(message, ok = true) {
   const el = $("flash");
   el.textContent = message || "";
@@ -113,18 +115,68 @@ function logsQueryString() {
   return params.toString();
 }
 
+function pretty(value) {
+  if (value === undefined || value === null || value === "") {
+    return "—";
+  }
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function hideLogDetail() {
+  $("logDetailModal").hidden = true;
+}
+
+async function openLogDetail(logId) {
+  let row = logsById[logId];
+  if (!row) {
+    try {
+      const data = await api(`/api/logs/${encodeURIComponent(logId)}`);
+      row = data.log;
+    } catch (err) {
+      flash(err.message || "Could not open log detail", false);
+      return;
+    }
+  }
+
+  const time = (row.time || "").replace("T", " ").replace(/\+00:00$/, "Z");
+  $("logDetailTitle").textContent = `${row.order_type || row.side || "Order"} · ${row.symbol || "—"}`;
+  $("logDetailMeta").textContent =
+    `${time} · Delta ${row.delta_order_id || "—"} · Platform ${row.platform_id || "—"} · Mirror ${row.mirror_id || "—"}`;
+
+  const latency = row.latency_ms;
+  $("logLatency").textContent =
+    latency === undefined || latency === null || latency === ""
+      ? "Overall latency: —"
+      : `Overall latency: ${latency} ms`;
+
+  $("deltaResponseBox").textContent = pretty(row.delta_response);
+  $("mirrorRequestBox").textContent = pretty(row.mirror_request || row.payload);
+  $("mirrorResponseBox").textContent = pretty(row.mirror_response);
+
+  $("logDetailModal").hidden = false;
+}
+
 function renderLogs(logs) {
   const body = $("logsBody");
+  Object.keys(logsById).forEach((k) => delete logsById[k]);
+
   if (!logs || !logs.length) {
     body.innerHTML = `<tr><td colspan="11" class="empty">No orders yet.</td></tr>`;
     return;
   }
 
   body.innerHTML = logs
-    .map((row) => {
+    .map((row, index) => {
       const status = row.status || "info";
       const time = (row.time || "").replace("T", " ").replace(/\+00:00$/, "Z");
-      return `<tr>
+      const logId = row.id || `idx-${index}`;
+      logsById[logId] = row;
+      const clickable = row.status === "copied" || row.status === "error" || row.delta_response || row.mirror_request;
+      return `<tr class="${clickable ? "clickable" : ""}" data-log-id="${escapeHtml(logId)}">
         <td>${escapeHtml(time)}</td>
         <td><span class="badge ${escapeHtml(status)}">${escapeHtml(status)}</span></td>
         <td>${escapeHtml(row.delta_order_id || "—")}</td>
@@ -140,6 +192,17 @@ function renderLogs(logs) {
     })
     .join("");
 }
+
+$("logsBody").addEventListener("click", (e) => {
+  const row = e.target.closest("tr[data-log-id]");
+  if (!row || !row.classList.contains("clickable")) return;
+  openLogDetail(row.getAttribute("data-log-id"));
+});
+
+$("logDetailClose").addEventListener("click", hideLogDetail);
+$("logDetailModal").addEventListener("click", (e) => {
+  if (e.target === $("logDetailModal")) hideLogDetail();
+});
 
 function escapeHtml(value) {
   return String(value)

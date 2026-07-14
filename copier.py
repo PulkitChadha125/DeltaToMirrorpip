@@ -177,6 +177,13 @@ class OrderCopier:
             return filtered
         return filtered[:limit]
 
+    def get_log(self, log_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            for row in self._logs:
+                if str(row.get("id")) == str(log_id):
+                    return dict(row)
+        return None
+
     def get_log_symbols(self) -> list[str]:
         with self._lock:
             symbols = sorted(
@@ -569,10 +576,12 @@ class OrderCopier:
         delta_order_id: str,
         prev_size: int,
         curr_size: int,
+        delta_response: dict[str, Any] | None = None,
     ) -> None:
         """Close FIFO mapped opens for this product/side until quantity is covered."""
         cfg = load_config()
         remaining = quantity
+        delta_resp = delta_response or {}
 
         with self._lock:
             opens = [
@@ -592,6 +601,7 @@ class OrderCopier:
             platform_id = str(binding.get("platform_id"))
             mirror_id = str(binding.get("mirror_id"))
             mapped_delta_id = str(binding.get("delta_order_id") or delta_order_id)
+            log_id = str(uuid.uuid4())
 
             payload = build_payload(
                 exchange=cfg.get("exchange") or "delta",
@@ -607,7 +617,15 @@ class OrderCopier:
                 mirror_id=mirror_id,
             )
 
+            mirror_request = {
+                "method": "POST",
+                "url": cfg["mirrorpip_webhook_url"],
+                "headers": {"Content-Type": "application/json", "Accept": "application/json"},
+                "body": payload,
+            }
+
             log_base = {
+                "id": log_id,
                 "time": _utc_now(),
                 "delta_order_id": mapped_delta_id,
                 "delta_product_id": product_id,
@@ -623,6 +641,10 @@ class OrderCopier:
                 "prev_size": prev_size,
                 "curr_size": curr_size,
                 "payload": payload,
+                "delta_response": delta_resp,
+                "mirror_request": mirror_request,
+                "mirror_response": {},
+                "latency_ms": None,
             }
 
             try:
@@ -641,7 +663,10 @@ class OrderCopier:
                     {
                         **log_base,
                         "status": "copied",
-                        "mirror_response": result,
+                        "mirror_request": result.get("mirror_request") or mirror_request,
+                        "mirror_response": result.get("mirror_response")
+                        or {"status_code": result.get("status_code"), "body": result.get("response")},
+                        "latency_ms": result.get("latency_ms"),
                         "message": (
                             f"Exited mapped position platform {platform_id} "
                             f"(mirror {mirror_id}): sent '{exit_order_type}' qty {close_qty}"
@@ -650,7 +675,8 @@ class OrderCopier:
                 )
                 print(
                     f"[MAP CLOSE] delta={mapped_delta_id} platform={platform_id} "
-                    f"mirror={mirror_id} {exit_order_type} qty={close_qty} {symbol}",
+                    f"mirror={mirror_id} {exit_order_type} qty={close_qty} {symbol} "
+                    f"latency={result.get('latency_ms')}ms",
                     flush=True,
                 )
                 remaining -= close_qty
@@ -659,17 +685,26 @@ class OrderCopier:
                     {
                         **log_base,
                         "status": "error",
+                        "mirror_request": {
+                            "method": "POST",
+                            "url": exc.webhook_url or cfg["mirrorpip_webhook_url"],
+                            "body": exc.request_payload or payload,
+                        },
+                        "mirror_response": {
+                            "status_code": exc.status_code,
+                            "body": exc.body,
+                        },
+                        "latency_ms": exc.latency_ms,
                         "message": str(exc),
-                        "mirror_response": {"status_code": exc.status_code, "body": exc.body},
                     }
                 )
                 self._set_status("running", str(exc))
                 break
 
-        # No mapped open found — still send exit so Mirror Pip is notified
         if remaining > 0:
             platform_id = self._next_platform_id()
             mirror_id = str(uuid.uuid4())
+            log_id = str(uuid.uuid4())
             payload = build_payload(
                 exchange=cfg.get("exchange") or "delta",
                 price=price,
@@ -682,7 +717,14 @@ class OrderCopier:
                 code=cfg.get("code") or "",
                 platform_id=platform_id,
             )
+            mirror_request = {
+                "method": "POST",
+                "url": cfg["mirrorpip_webhook_url"],
+                "headers": {"Content-Type": "application/json", "Accept": "application/json"},
+                "body": payload,
+            }
             log_base = {
+                "id": log_id,
                 "time": _utc_now(),
                 "delta_order_id": delta_order_id,
                 "delta_product_id": product_id,
@@ -698,6 +740,10 @@ class OrderCopier:
                 "prev_size": prev_size,
                 "curr_size": curr_size,
                 "payload": payload,
+                "delta_response": delta_resp,
+                "mirror_request": mirror_request,
+                "mirror_response": {},
+                "latency_ms": None,
             }
             try:
                 result = send_order(cfg["mirrorpip_webhook_url"], payload)
@@ -707,7 +753,10 @@ class OrderCopier:
                         **log_base,
                         "mirror_id": mirror_id,
                         "status": "copied",
-                        "mirror_response": result,
+                        "mirror_request": result.get("mirror_request") or mirror_request,
+                        "mirror_response": result.get("mirror_response")
+                        or {"status_code": result.get("status_code"), "body": result.get("response")},
+                        "latency_ms": result.get("latency_ms"),
                         "message": (
                             f"Exit without prior map: sent '{exit_order_type}' "
                             f"qty {remaining} (platform {platform_id})"
@@ -719,8 +768,17 @@ class OrderCopier:
                     {
                         **log_base,
                         "status": "error",
+                        "mirror_request": {
+                            "method": "POST",
+                            "url": exc.webhook_url or cfg["mirrorpip_webhook_url"],
+                            "body": exc.request_payload or payload,
+                        },
+                        "mirror_response": {
+                            "status_code": exc.status_code,
+                            "body": exc.body,
+                        },
+                        "latency_ms": exc.latency_ms,
                         "message": str(exc),
-                        "mirror_response": {"status_code": exc.status_code, "body": exc.body},
                     }
                 )
                 self._set_status("running", str(exc))
@@ -761,6 +819,26 @@ class OrderCopier:
             price = str((fill or {}).get("price") or entry_price or "0")
             delta_order_id = str((fill or {}).get("order_id") or (fill or {}).get("id") or f"{pid}:{_utc_now()}")
 
+            order_detail = None
+            if fill and fill.get("order_id") not in (None, ""):
+                order_detail = client.get_order_by_id(fill.get("order_id"))
+
+            delta_response = {
+                "product_id": pid,
+                "symbol": symbol,
+                "prev_size": prev_size,
+                "curr_size": curr_size,
+                "position": (snapshot.get(pid) or {}).get("raw")
+                or {
+                    "product_id": pid,
+                    "product_symbol": symbol,
+                    "size": curr_size,
+                    "entry_price": entry_price,
+                },
+                "fill": fill,
+                "order": order_detail,
+            }
+
             actions = map_position_change(prev_size, curr_size)
             for order_type, qty in actions:
                 if order_type == "buy":
@@ -777,6 +855,7 @@ class OrderCopier:
                         prev_size=prev_size,
                         curr_size=curr_size,
                         order_type="buy",
+                        delta_response=delta_response,
                     )
                 elif order_type == "short":
                     tp, sl = self._extract_tp_sl(pid, price, orders)
@@ -792,6 +871,7 @@ class OrderCopier:
                         prev_size=prev_size,
                         curr_size=curr_size,
                         order_type="short",
+                        delta_response=delta_response,
                     )
                 elif order_type == "sell":
                     self._close_mapped_positions(
@@ -804,6 +884,7 @@ class OrderCopier:
                         delta_order_id=delta_order_id,
                         prev_size=prev_size,
                         curr_size=curr_size,
+                        delta_response=delta_response,
                     )
                 elif order_type == "cover":
                     self._close_mapped_positions(
@@ -816,6 +897,7 @@ class OrderCopier:
                         delta_order_id=delta_order_id,
                         prev_size=prev_size,
                         curr_size=curr_size,
+                        delta_response=delta_response,
                     )
 
             if curr_size == 0:

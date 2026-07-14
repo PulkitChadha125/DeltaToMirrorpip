@@ -153,6 +153,33 @@
     </div>
   </div>
 
+  <div class="modal-backdrop" id="logDetailModal" hidden>
+    <div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="logDetailTitle">
+      <div class="log-detail-head">
+        <div>
+          <h3 id="logDetailTitle">Order log detail</h3>
+          <p class="hint" id="logDetailMeta"></p>
+        </div>
+        <button type="button" class="btn btn-ghost" id="logDetailClose">Close</button>
+      </div>
+      <div class="latency-banner" id="logLatency">Overall latency: —</div>
+      <div class="detail-grid">
+        <section class="detail-col">
+          <h4>Delta response</h4>
+          <pre id="deltaResponseBox"></pre>
+        </section>
+        <section class="detail-col">
+          <h4>Mirror Pip request</h4>
+          <pre id="mirrorRequestBox"></pre>
+        </section>
+        <section class="detail-col">
+          <h4>Mirror Pip response</h4>
+          <pre id="mirrorResponseBox"></pre>
+        </section>
+      </div>
+    </div>
+  </div>
+
   <script src="/static/app.js"></script>
 </body>
 </html>
