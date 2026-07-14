@@ -36,7 +36,8 @@ echo [3/3] Starting Flask app on http://0.0.0.0:5050
 echo Local:  http://127.0.0.1:5050
 echo Remote: http://YOUR-SERVER-IP:5050
 echo Press Ctrl+C to stop.
-echo.".venv\Scripts\python.exe" app.py
+echo.
+".venv\Scripts\python.exe" app.py
 
 pause
 endlocal
