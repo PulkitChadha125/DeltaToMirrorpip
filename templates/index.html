@@ -33,7 +33,7 @@
     <div class="grid">
       <section class="panel">
         <h2>User Config</h2>
-        <p class="hint">Edit Exchange, Code, Webhook URL, and poll interval (min 200 ms).</p>
+        <p class="hint">Edit Exchange, Code, Webhook URL, and poll interval.</p>
         <form id="configForm" class="form">
           <label>
             Exchange
@@ -53,7 +53,7 @@
           </label>
           <label>
             Poll interval (ms)
-            <input id="poll_interval_ms" name="poll_interval_ms" type="number" min="200" step="50" placeholder="300" />
+            <input id="poll_interval_ms" name="poll_interval_ms" type="number" min="1" step="1" placeholder="300" />
           </label>
           <label class="full">
             Delta API base URL
@@ -162,7 +162,6 @@
         </div>
         <button type="button" class="btn btn-ghost" id="logDetailClose">Close</button>
       </div>
-      <div class="latency-banner" id="logLatency">Overall latency: —</div>
       <div class="detail-grid">
         <section class="detail-col">
           <h4>Delta response</h4>

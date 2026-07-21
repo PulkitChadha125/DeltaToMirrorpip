@@ -6,7 +6,7 @@ When you click **Start**, the app:
 
 1. Logs in to the Delta API (using `credentials.csv`)
 2. Snapshots existing open positions (those are **not** copied)
-3. Polls net position size on a fast interval (default **300 ms**, minimum **200 ms**)
+3. Polls net position size on a fast interval (default **300 ms**)
 4. On each change, maps **Delta order ↔ platform ID ↔ Mirror Pip ID**, sends the Mirror Pip webhook, and writes an order log
 
 ## Features
@@ -52,7 +52,7 @@ pip install -r requirements.txt
 
 ## How to run
 
-### Option A — easiest (Windows)
+### Option A — REST polling (default)
 
 1. Put your keys in `credentials.csv` (or fill them in the UI after start).
 2. Double-click **`run.bat`**
@@ -62,6 +62,20 @@ pip install -r requirements.txt
 3. Open the dashboard:
    - Local: http://127.0.0.1:5050
    - Remote: http://YOUR-SERVER-IP:5050
+
+### Option A2 — WebSocket positions (same UI)
+
+Use **`run_ws.bat`** instead of `run.bat`. The dashboard looks the same; position updates come from Delta’s private **positions** WebSocket channel.
+
+**WebSocket flow:**
+1. Connect to `wss://socket.india.delta.exchange`
+2. Authenticate with `key-auth` (HMAC signature)
+3. Enable heartbeat
+4. Subscribe to `positions` with `"symbols": ["all"]`
+5. Receive initial snapshot (not copied — baseline already set via REST)
+6. Receive incremental `create` / `update` / `delete` events → Mirror Pip copy
+
+Enable via `run_ws.bat`, `"position_source": "websocket"` in `config.json`, or `DELTA_POSITION_SOURCE=websocket`.
 
 ### Option B — open firewall port (server access)
 
@@ -115,15 +129,17 @@ totp,OPTIONAL_TOTP
 | `code` | Your Mirror Pip code | — |
 | `mirrorpip_webhook_url` | Webhook endpoint | `https://trade.mirrorpip.com/tradingview` |
 | `delta_base_url` | Delta REST API | `https://api.india.delta.exchange` |
-| `poll_interval_ms` | How often to poll net positions (min **200**) | `300` |
+| `delta_ws_url` | Delta private WebSocket URL (optional; derived from REST URL if blank) | — |
+| `poll_interval_ms` | REST poll interval (REST mode only) | `300` |
 | `instrument_type` | Sent in payload | `NA` |
+| `position_source` | `rest` or `websocket` | `rest` |
 
 ## How copying works
 
 Uses [`delta-rest-client`](https://pypi.org/project/delta-rest-client/) to:
 
 - Authenticate (wallet/balances check)
-- Poll `/v2/positions/margined` for **net position** size
+- Poll `/v2/positions/margined` for **net position** size (**REST mode**), or subscribe to the private **positions** WebSocket channel (**WebSocket mode** via `websocket.py`)
 - Read recent fills / live orders for price and TP/SL context
 
 ### Order type mapping

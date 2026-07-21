@@ -19,11 +19,20 @@ DEFAULT_CONFIG = {
     "code": "",
     "mirrorpip_webhook_url": "https://trade.mirrorpip.com/tradingview",
     "delta_base_url": "https://api.india.delta.exchange",
+    "delta_ws_url": "",
     "poll_interval_ms": 300,
     "instrument_type": "NA",
+    "position_source": "rest",
 }
 
-MIN_POLL_INTERVAL_MS = 200
+
+def _parse_poll_interval_ms(value: Any, fallback: int = DEFAULT_CONFIG["poll_interval_ms"]) -> int:
+    try:
+        ms = int(float(value))
+    except (TypeError, ValueError):
+        return fallback
+    # Technical floor of 1 ms avoids a busy-spin; no UI minimum beyond that.
+    return max(1, ms)
 
 
 def _normalize_config(data: dict[str, Any]) -> dict[str, Any]:
@@ -33,22 +42,22 @@ def _normalize_config(data: dict[str, Any]) -> dict[str, Any]:
     # Migrate legacy seconds → milliseconds
     if "poll_interval_ms" not in data and "poll_interval_seconds" in data:
         try:
-            merged["poll_interval_ms"] = max(
-                MIN_POLL_INTERVAL_MS,
-                int(float(data["poll_interval_seconds"]) * 1000),
+            merged["poll_interval_ms"] = _parse_poll_interval_ms(
+                float(data["poll_interval_seconds"]) * 1000
             )
         except (TypeError, ValueError):
             merged["poll_interval_ms"] = DEFAULT_CONFIG["poll_interval_ms"]
 
-    try:
-        merged["poll_interval_ms"] = max(
-            MIN_POLL_INTERVAL_MS,
-            int(float(merged.get("poll_interval_ms", DEFAULT_CONFIG["poll_interval_ms"]))),
-        )
-    except (TypeError, ValueError):
-        merged["poll_interval_ms"] = DEFAULT_CONFIG["poll_interval_ms"]
+    merged["poll_interval_ms"] = _parse_poll_interval_ms(
+        merged.get("poll_interval_ms", DEFAULT_CONFIG["poll_interval_ms"])
+    )
 
     merged.pop("poll_interval_seconds", None)
+
+    source = str(merged.get("position_source") or "rest").strip().lower()
+    merged["position_source"] = "websocket" if source == "websocket" else "rest"
+    merged["delta_ws_url"] = str(merged.get("delta_ws_url") or "").strip()
+
     return merged
 
 
@@ -73,23 +82,22 @@ def save_config(updates: dict[str, Any]) -> dict[str, Any]:
             "code",
             "mirrorpip_webhook_url",
             "delta_base_url",
+            "delta_ws_url",
             "poll_interval_ms",
             "instrument_type",
+            "position_source",
         }
         for key, value in updates.items():
             if key == "poll_interval_seconds" and "poll_interval_ms" not in updates:
                 try:
-                    current["poll_interval_ms"] = max(
-                        MIN_POLL_INTERVAL_MS,
-                        int(float(value) * 1000),
-                    )
+                    current["poll_interval_ms"] = _parse_poll_interval_ms(float(value) * 1000)
                 except (TypeError, ValueError):
                     pass
                 continue
             if key not in allowed:
                 continue
             if key == "poll_interval_ms":
-                current[key] = max(MIN_POLL_INTERVAL_MS, int(float(value)))
+                current[key] = _parse_poll_interval_ms(value)
             else:
                 current[key] = str(value).strip() if value is not None else ""
 

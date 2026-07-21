@@ -4,7 +4,7 @@ setlocal
 cd /d "%~dp0"
 
 echo ========================================
-echo  Delta to Mirror Pip Copier
+echo  Delta to Mirror Pip Copier (WebSocket)
 echo ========================================
 echo.
 
@@ -32,12 +32,13 @@ if errorlevel 1 (
 )
 
 echo.
-echo [3/3] Starting Flask app on http://0.0.0.0:5050
+echo [3/3] Starting Flask app (WebSocket mode) on http://0.0.0.0:5050
 echo Local:  http://127.0.0.1:5050
 echo Remote: http://YOUR-SERVER-IP:5050
 echo Press Ctrl+C to stop.
 echo.
 start "" cmd /c "timeout /t 2 /nobreak >nul & start http://127.0.0.1:5050"
+set DELTA_POSITION_SOURCE=websocket
 ".venv\Scripts\python.exe" app.py
 
 pause

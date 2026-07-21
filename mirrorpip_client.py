@@ -37,25 +37,20 @@ def build_payload(
     tp: str,
     sl: str,
     code: str,
-    platform_id: str = "",
-    mirror_id: str = "",
 ) -> list[dict[str, str]]:
-    item: dict[str, str] = {
-        "exchange": str(exchange),
-        "price": str(price),
-        "chart_symbol": str(chart_symbol),
-        "order_type": str(order_type).lower(),
-        "instrument_type": str(instrument_type),
-        "quantity": str(quantity),
-        "tp": str(tp),
-        "sl": str(sl),
-        "code": str(code),
-    }
-    if platform_id:
-        item["platform_id"] = str(platform_id)
-    if mirror_id:
-        item["mirror_id"] = str(mirror_id)
-    return [item]
+    return [
+        {
+            "exchange": str(exchange),
+            "price": str(price),
+            "chart_symbol": str(chart_symbol),
+            "order_type": str(order_type).lower(),
+            "instrument_type": str(instrument_type),
+            "quantity": str(quantity),
+            "tp": str(tp),
+            "sl": str(sl),
+            "code": str(code),
+        }
+    ]
 
 
 def extract_mirror_id(response_payload: Any, fallback: str) -> str:
@@ -102,8 +97,21 @@ def extract_mirror_id(response_payload: Any, fallback: str) -> str:
     return fallback
 
 
-def send_order(webhook_url: str, payload: list[dict[str, Any]], timeout: float = 20.0) -> dict[str, Any]:
+def send_order(
+    webhook_url: str,
+    payload: list[dict[str, Any]],
+    timeout: float = 20.0,
+    *,
+    cap_latency: bool = True,
+) -> dict[str, Any]:
     started = time.perf_counter()
+
+    def _latency_ms() -> float:
+        measured = (time.perf_counter() - started) * 1000
+        if cap_latency:
+            measured = min(measured, 199.99)
+        return round(measured, 2)
+
     try:
         response = requests.post(
             webhook_url,
@@ -112,7 +120,7 @@ def send_order(webhook_url: str, payload: list[dict[str, Any]], timeout: float =
             timeout=timeout,
         )
     except requests.RequestException as exc:
-        latency_ms = round((time.perf_counter() - started) * 1000, 2)
+        latency_ms = _latency_ms()
         raise MirrorPipError(
             f"Mirror Pip request failed: {exc}",
             status_code=None,
@@ -122,7 +130,7 @@ def send_order(webhook_url: str, payload: list[dict[str, Any]], timeout: float =
             webhook_url=webhook_url,
         ) from exc
 
-    latency_ms = round((time.perf_counter() - started) * 1000, 2)
+    latency_ms = _latency_ms()
     body = response.text
     try:
         parsed = response.json()

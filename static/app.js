@@ -130,6 +130,14 @@ function hideLogDetail() {
   $("logDetailModal").hidden = true;
 }
 
+function orderTypeClass(orderType) {
+  const t = String(orderType || "").toLowerCase();
+  if (t === "buy") return "order-type-buy";
+  if (t === "short") return "order-type-short";
+  if (t === "sell" || t === "cover") return "order-type-exit";
+  return "";
+}
+
 async function openLogDetail(logId) {
   let row = logsById[logId];
   if (!row) {
@@ -143,15 +151,13 @@ async function openLogDetail(logId) {
   }
 
   const time = (row.time || "").replace("T", " ").replace(/\+00:00$/, "Z");
-  $("logDetailTitle").textContent = `${row.order_type || row.side || "Order"} · ${row.symbol || "—"}`;
+  const orderType = row.order_type || row.side || "Order";
+  const typeClass = orderTypeClass(orderType);
+  $("logDetailTitle").innerHTML = typeClass
+    ? `<span class="${typeClass}">${escapeHtml(orderType)}</span> · ${escapeHtml(row.symbol || "—")}`
+    : `${escapeHtml(orderType)} · ${escapeHtml(row.symbol || "—")}`;
   $("logDetailMeta").textContent =
     `${time} · Delta ${row.delta_order_id || "—"} · Platform ${row.platform_id || "—"} · Mirror ${row.mirror_id || "—"}`;
-
-  const latency = row.latency_ms;
-  $("logLatency").textContent =
-    latency === undefined || latency === null || latency === ""
-      ? "Overall latency: —"
-      : `Overall latency: ${latency} ms`;
 
   $("deltaResponseBox").textContent = pretty(row.delta_response);
   $("mirrorRequestBox").textContent = pretty(row.mirror_request || row.payload);
@@ -212,10 +218,12 @@ function escapeHtml(value) {
     .replaceAll('"', "&quot;");
 }
 
-async function refreshStatus() {
+async function refreshStatus({ syncConfig = false } = {}) {
   const data = await api("/api/status");
   setStatus(data.copier || {});
-  fillConfig(data.config || {});
+  if (syncConfig) {
+    fillConfig(data.config || {});
+  }
 }
 
 async function refreshLogs() {
@@ -226,7 +234,7 @@ async function refreshLogs() {
 }
 
 async function bootstrap() {
-  await refreshStatus();
+  await refreshStatus({ syncConfig: true });
   const creds = await api("/api/credentials");
   fillCredentials(creds);
   await refreshLogs();
@@ -357,11 +365,12 @@ $("configForm").addEventListener("submit", async (e) => {
       return;
     }
     let pollMs = Number($("poll_interval_ms").value || 300);
-    if (pollMs < 200) {
-      flash("Poll interval minimum is 200 ms", false);
+    if (!Number.isFinite(pollMs) || pollMs < 1) {
+      flash("Poll interval must be at least 1 ms", false);
       $("poll_interval_ms").focus();
       return;
     }
+    pollMs = Math.floor(pollMs);
     const payload = {
       exchange: $("exchange").value,
       code: $("code").value,

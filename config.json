@@ -3,6 +3,8 @@
   "code": "68ZMEQ6S5ZA507N0",
   "mirrorpip_webhook_url": "https://trade.mirrorpip.com/tradingview",
   "delta_base_url": "https://api.india.delta.exchange",
-  "poll_interval_ms": 300,
-  "instrument_type": "NA"
+  "delta_ws_url": "",
+  "poll_interval_ms": 5,
+  "instrument_type": "NA",
+  "position_source": "rest"
 }

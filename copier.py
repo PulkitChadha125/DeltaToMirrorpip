@@ -1,6 +1,6 @@
 """Background Delta → Mirror Pip position copier.
 
-Polls net positions (default every 300ms, min 200ms) and copies changes:
+Polls net positions (default every 300ms) and copies changes:
 
   open / increase long   → buy   (creates platform_id ↔ mirror_id mapping)
   close / reduce long    → sell  (exits mapped platform position)
@@ -13,15 +13,18 @@ from __future__ import annotations
 import csv
 import io
 import json
+import os
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from config_store import MIN_POLL_INTERVAL_MS, load_config, load_credentials
+from config_store import load_config, load_credentials
 from delta_client import DeltaAPIError, DeltaClient
 from mirrorpip_client import MirrorPipError, build_payload, extract_mirror_id, send_order
+from websocket import DeltaPositionWebSocket, PositionUpdateQueue, rest_base_to_ws_url
 
 ROOT = Path(__file__).resolve().parent
 LOGS_PATH = ROOT / "order_logs.json"
@@ -119,6 +122,25 @@ class OrderCopier:
             self._bindings = list(raw_bindings or [])
         self._logs: list[dict[str, Any]] = _read_json(LOGS_PATH, [])
         self._platform_counter = int(_read_json(PLATFORM_COUNTER_PATH, {"n": 100}).get("n", 100))
+        self._ws_client: DeltaPositionWebSocket | None = None
+        self._ws_updates = PositionUpdateQueue()
+
+    def _uses_websocket(self) -> bool:
+        env_source = os.environ.get("DELTA_POSITION_SOURCE", "").strip().lower()
+        if env_source == "websocket":
+            return True
+        if env_source == "rest":
+            return False
+        cfg = load_config()
+        return str(cfg.get("position_source") or "rest").strip().lower() == "websocket"
+
+    def _ws_url(self) -> str:
+        cfg = load_config()
+        explicit = str(cfg.get("delta_ws_url") or "").strip()
+        if explicit:
+            return explicit
+        base = cfg.get("delta_base_url") or "https://api.india.delta.exchange"
+        return rest_base_to_ws_url(base)
 
     @property
     def running(self) -> bool:
@@ -135,6 +157,8 @@ class OrderCopier:
                 "tracked_products": len(self._positions),
                 "open_positions": open_positions,
                 "bindings": open_maps,
+                "position_source": "websocket" if self._uses_websocket() else "rest",
+                "ws_connected": bool(self._ws_client and self._ws_client.connected),
             }
 
     def get_logs(
@@ -284,6 +308,8 @@ class OrderCopier:
                 "base_url": cfg.get("delta_base_url") or "https://api.india.delta.exchange",
                 "open_positions_snapshotted": open_positions,
                 "poll_interval_ms": cfg.get("poll_interval_ms", 300),
+                "position_source": "websocket" if self._uses_websocket() else "rest",
+                "ws_url": self._ws_url() if self._uses_websocket() else None,
                 "message": "Delta API login successful",
             }
             print("\n=== Delta API login response ===", flush=True)
@@ -309,7 +335,12 @@ class OrderCopier:
         self._stop_event.clear()
         self._running = True
         self._status = "running"
-        self._thread = threading.Thread(target=self._run_loop, name="delta-copier", daemon=True)
+        loop_target = self._run_ws_loop if self._uses_websocket() else self._run_loop
+        self._thread = threading.Thread(
+            target=loop_target,
+            name="delta-copier-ws" if self._uses_websocket() else "delta-copier",
+            daemon=True,
+        )
         self._thread.start()
 
         self._append_log(
@@ -332,6 +363,9 @@ class OrderCopier:
             return {"ok": False, "message": "Copier is not running."}
         self._stop_event.set()
         self._status = "stopping"
+        ws_client = self._ws_client
+        if ws_client is not None:
+            ws_client.stop()
         thread = self._thread
         if thread and thread.is_alive():
             thread.join(timeout=8)
@@ -468,10 +502,9 @@ class OrderCopier:
             order_type=order_type,
             instrument_type=cfg.get("instrument_type") or "NA",
             quantity=str(quantity),
-            tp=tp,
-            sl=sl,
+            tp="0",
+            sl="0",
             code=cfg.get("code") or "",
-            platform_id=platform_id,
         )
 
         mirror_request = {
@@ -493,8 +526,8 @@ class OrderCopier:
             "order_type": order_type,
             "price": price,
             "quantity": str(quantity),
-            "tp": tp,
-            "sl": sl,
+            "tp": "0",
+            "sl": "0",
             "prev_size": prev_size,
             "curr_size": curr_size,
             "payload": payload,
@@ -505,7 +538,11 @@ class OrderCopier:
         }
 
         try:
-            result = send_order(cfg["mirrorpip_webhook_url"], payload)
+            result = send_order(
+                cfg["mirrorpip_webhook_url"],
+                payload,
+                cap_latency=not self._uses_websocket(),
+            )
             mirror_id = extract_mirror_id(result, provisional_mirror_id)
             binding = {
                 "platform_id": platform_id,
@@ -613,8 +650,6 @@ class OrderCopier:
                 tp="0",
                 sl="0",
                 code=cfg.get("code") or "",
-                platform_id=platform_id,
-                mirror_id=mirror_id,
             )
 
             mirror_request = {
@@ -648,7 +683,11 @@ class OrderCopier:
             }
 
             try:
-                result = send_order(cfg["mirrorpip_webhook_url"], payload)
+                result = send_order(
+                    cfg["mirrorpip_webhook_url"],
+                    payload,
+                    cap_latency=not self._uses_websocket(),
+                )
                 new_remaining = avail - close_qty
                 with self._lock:
                     for b in self._bindings:
@@ -715,7 +754,6 @@ class OrderCopier:
                 tp="0",
                 sl="0",
                 code=cfg.get("code") or "",
-                platform_id=platform_id,
             )
             mirror_request = {
                 "method": "POST",
@@ -746,7 +784,11 @@ class OrderCopier:
                 "latency_ms": None,
             }
             try:
-                result = send_order(cfg["mirrorpip_webhook_url"], payload)
+                result = send_order(
+                    cfg["mirrorpip_webhook_url"],
+                    payload,
+                    cap_latency=not self._uses_websocket(),
+                )
                 mirror_id = extract_mirror_id(result, mirror_id)
                 self._append_log(
                     {
@@ -842,15 +884,14 @@ class OrderCopier:
             actions = map_position_change(prev_size, curr_size)
             for order_type, qty in actions:
                 if order_type == "buy":
-                    tp, sl = self._extract_tp_sl(pid, price, orders)
                     self._open_mapped_position(
                         product_id=pid,
                         symbol=symbol,
                         side="long",
                         quantity=qty,
                         price=price,
-                        tp=tp,
-                        sl=sl,
+                        tp="0",
+                        sl="0",
                         delta_order_id=delta_order_id,
                         prev_size=prev_size,
                         curr_size=curr_size,
@@ -858,15 +899,14 @@ class OrderCopier:
                         delta_response=delta_response,
                     )
                 elif order_type == "short":
-                    tp, sl = self._extract_tp_sl(pid, price, orders)
                     self._open_mapped_position(
                         product_id=pid,
                         symbol=symbol,
                         side="short",
                         quantity=qty,
                         price=price,
-                        tp=tp,
-                        sl=sl,
+                        tp="0",
+                        sl="0",
                         delta_order_id=delta_order_id,
                         prev_size=prev_size,
                         curr_size=curr_size,
@@ -929,15 +969,22 @@ class OrderCopier:
             }
         self._save_positions()
         count = len(self._positions)
+        if self._uses_websocket():
+            watch_msg = (
+                f"Watching net positions via WebSocket ({self._ws_url()}). "
+                f"Snapshotted {count} open position(s) (not copied)."
+            )
+        else:
+            watch_msg = (
+                f"Watching net positions every "
+                f"{load_config().get('poll_interval_ms', 300)}ms. "
+                f"Snapshotted {count} open position(s) (not copied)."
+            )
         self._append_log(
             {
                 "time": _utc_now(),
                 "status": "info",
-                "message": (
-                    f"Watching net positions every "
-                    f"{load_config().get('poll_interval_ms', 300)}ms. "
-                    f"Snapshotted {count} open position(s) (not copied)."
-                ),
+                "message": watch_msg,
             }
         )
         return count
@@ -945,7 +992,7 @@ class OrderCopier:
     def _poll_wait_seconds(self) -> float:
         cfg = load_config()
         ms = int(cfg.get("poll_interval_ms") or 300)
-        ms = max(MIN_POLL_INTERVAL_MS, ms)
+        ms = max(1, ms)
         return ms / 1000.0
 
     def _run_loop(self) -> None:
@@ -978,6 +1025,94 @@ class OrderCopier:
                 )
                 self._stop_event.wait(1)
 
+        self._running = False
+        self._set_status("stopped")
+
+    def _run_ws_loop(self) -> None:
+        client = self._build_client()
+        creds = load_credentials()
+        bootstrap_snapshot = self._snapshot_positions(client)
+
+        self._ws_updates = PositionUpdateQueue()
+        self._ws_client = DeltaPositionWebSocket(
+            api_key=creds["key"],
+            api_secret=creds["secret"],
+            ws_url=self._ws_url(),
+            stop_event=self._stop_event,
+            on_positions_changed=self._ws_updates.notify,
+        )
+        self._ws_client.seed_cache(bootstrap_snapshot)
+        self._ws_client.start()
+
+        deadline = time.time() + 20
+        while not self._stop_event.is_set() and time.time() < deadline:
+            if self._ws_client.connected:
+                break
+            if self._ws_client.last_error:
+                self._set_status("running", self._ws_client.last_error)
+            self._stop_event.wait(0.25)
+
+        if not self._stop_event.is_set():
+            if self._ws_client.connected:
+                self._append_log(
+                    {
+                        "time": _utc_now(),
+                        "status": "info",
+                        "message": (
+                            f"Delta WebSocket connected "
+                            f"(client_id={self._ws_client.client_id})."
+                        ),
+                    }
+                )
+            else:
+                self._append_log(
+                    {
+                        "time": _utc_now(),
+                        "status": "error",
+                        "message": (
+                            "Delta WebSocket not authenticated yet; "
+                            "will keep retrying in the background."
+                        ),
+                    }
+                )
+
+        while not self._stop_event.is_set():
+            try:
+                client = self._build_client()
+                ws_client = self._ws_client
+                if ws_client is None:
+                    self._stop_event.wait(1)
+                    continue
+
+                if self._ws_updates.wait(timeout=2.0):
+                    snapshot = ws_client.get_snapshot()
+                    self._process_position_diffs(client, snapshot)
+                elif ws_client.last_error:
+                    self._set_status("running", ws_client.last_error)
+            except DeltaAPIError as exc:
+                self._set_status("running", str(exc))
+                self._append_log(
+                    {
+                        "time": _utc_now(),
+                        "status": "error",
+                        "message": f"Delta REST enrich error: {exc}",
+                    }
+                )
+                self._stop_event.wait(1)
+            except Exception as exc:  # noqa: BLE001
+                self._set_status("running", str(exc))
+                self._append_log(
+                    {
+                        "time": _utc_now(),
+                        "status": "error",
+                        "message": f"Copier error: {exc}",
+                    }
+                )
+                self._stop_event.wait(1)
+
+        if self._ws_client is not None:
+            self._ws_client.stop()
+            self._ws_client = None
         self._running = False
         self._set_status("stopped")
 
